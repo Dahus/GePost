@@ -3,6 +3,4 @@ builder = "nixpacks"
 
 [deploy]
 startCommand = "python GePost.py"
-healthcheckPath = "/"
-healthcheckTimeout = 300
 restartPolicyType = "never"
