@@ -1,6 +1,7 @@
 import random
 import asyncio
 import json
+import os
 from datetime import datetime, timedelta
 from pathlib import Path
 from pixivpy3 import AppPixivAPI
@@ -23,14 +24,40 @@ logger = logging.getLogger(__name__)
 CONFIG_FILE = 'config.json'
 
 def load_config():
-    """Загружает конфигурацию из файла"""
+    """Загружает конфигурацию из файла или переменных окружения"""
+    # Пробуем загрузить из файла (для локальной разработки)
     script_dir = Path(__file__).parent
     config_path = script_dir / CONFIG_FILE
     
-    with open(config_path, 'r', encoding='utf-8') as f:
-        config = json.load(f)
+    if config_path.exists():
+        with open(config_path, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+        logger.info("Конфигурация загружена из файла")
+        return config
     
-    logger.info("Конфигурация загружена")
+    # Если файла нет - читаем из env (для Railway)
+    logger.info("Файл config.json не найден, читаю из переменных окружения")
+    
+    config = {
+        'pixiv_refresh_token': os.getenv('PIXIV_REFRESH_TOKEN'),
+        'telegram_bot_token': os.getenv('TELEGRAM_BOT_TOKEN'),
+        'telegram_channel_id': os.getenv('TELEGRAM_CHANNEL_ID'),
+        'telegram_thread_id': os.getenv('TELEGRAM_THREAD_ID'),
+        'interval_hours': int(os.getenv('INTERVAL_HOURS', 3)),
+        'interval_minutes': int(os.getenv('INTERVAL_MINUTES', 0)),
+        'post_immediately_on_start': os.getenv('POST_IMMEDIATELY_ON_START', 'false').lower() == 'true',
+        'quiet_hours': {
+            'enabled': os.getenv('QUIET_HOURS_ENABLED', 'false').lower() == 'true',
+            'start_hour': int(os.getenv('QUIET_HOURS_START', 0)),
+            'end_hour': int(os.getenv('QUIET_HOURS_END', 0))
+        }
+    }
+    
+    # Проверка обязательных параметров
+    if not config['pixiv_refresh_token'] or not config['telegram_bot_token'] or not config['telegram_channel_id']:
+        raise ValueError("Не заданы обязательные переменные окружения: PIXIV_REFRESH_TOKEN, TELEGRAM_BOT_TOKEN, TELEGRAM_CHANNEL_ID")
+    
+    logger.info("Конфигурация загружена из переменных окружения")
     return config
 
 async def get_last_post_time(bot_token, channel_id):
@@ -159,6 +186,25 @@ def get_random_pixiv_art(refresh_token):
         logger.error(f"Ошибка при получении арта из Pixiv: {e}")
         return None, None
 
+def is_quiet_hours(config):
+    """Проверяет, не тихие ли сейчас часы"""
+    quiet = config.get('quiet_hours', {})
+    
+    if not quiet.get('enabled', False):
+        return False
+    
+    now = datetime.now()
+    current_hour = now.hour
+    start = quiet.get('start_hour', 0)
+    end = quiet.get('end_hour', 0)
+    
+    # Если диапазон через полночь (например 23-5)
+    if start > end:
+        return current_hour >= start or current_hour < end
+    # Обычный диапазон (например 1-5)
+    else:
+        return start <= current_hour < end
+
 async def post_random_art(config):
     """Публикует случайную картинку"""
     logger.info(f"\n{'='*50}")
@@ -238,25 +284,6 @@ async def countdown_timer(total_seconds):
     
     logger.info(f"[ТАЙМЕР] Время вышло! Начинаю публикацию...\n")
 
-def is_quiet_hours(config):
-    """Проверяет, не тихие ли сейчас часы"""
-    quiet = config.get('quiet_hours', {})
-    
-    if not quiet.get('enabled', False):
-        return False
-    
-    now = datetime.now()
-    current_hour = now.hour
-    start = quiet.get('start_hour', 0)
-    end = quiet.get('end_hour', 0)
-    
-    # Если диапазон через полночь (например 23-5)
-    if start > end:
-        return current_hour >= start or current_hour < end
-    # Обычный диапазон (например 1-5)
-    else:
-        return start <= current_hour < end
-
 async def run_bot():
     """Основной цикл бота"""
     config = load_config()
@@ -264,6 +291,8 @@ async def run_bot():
     logger.info("=" * 50)
     logger.info("БОТ ЗАПУЩЕН!")
     logger.info(f"Интервал публикаций: {config['interval_hours']}ч {config['interval_minutes']}м")
+    logger.info(f"Канал: {config['telegram_channel_id']}")
+    logger.info(f"Пост при запуске: {'ВКЛ' if config['post_immediately_on_start'] else 'ВЫКЛ'}")
     
     quiet = config.get('quiet_hours', {})
     if quiet.get('enabled'):
@@ -273,9 +302,11 @@ async def run_bot():
     
     interval_seconds = config['interval_hours'] * 3600 + config['interval_minutes'] * 60
     
+    # Постим сразу при запуске, если включен флаг и не тихие часы
     if config['post_immediately_on_start'] and not is_quiet_hours(config):
         await post_random_art(config)
     
+    # Бесконечный цикл с интервалом
     while True:
         await countdown_timer(interval_seconds)
         
