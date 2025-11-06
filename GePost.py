@@ -265,7 +265,7 @@ async def countdown_timer(total_seconds):
     logger.info(f"Публикация в: {target_time.strftime('%H:%M:%S')} МСК")
     
     # Показываем обновления таймера
-    last_log = datetime.now()
+    last_log = datetime.now(MOSCOW_TZ)
     update_interval = 60  # Обновление каждую минуту
     
     while total_seconds > 0:
