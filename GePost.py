@@ -8,6 +8,7 @@ from pixivpy3 import AppPixivAPI
 from telegram import Bot
 import logging
 import sys
+from zoneinfo import ZoneInfo
 
 # Настройка логирования с поддержкой UTF-8
 logging.basicConfig(
@@ -193,7 +194,7 @@ def is_quiet_hours(config):
     if not quiet.get('enabled', False):
         return False
     
-    now = datetime.now()
+    now = datetime.now(MOSCOW_TZ)  # МСК время!
     current_hour = now.hour
     start = quiet.get('start_hour', 0)
     end = quiet.get('end_hour', 0)
@@ -208,7 +209,7 @@ def is_quiet_hours(config):
 async def post_random_art(config):
     """Публикует случайную картинку"""
     logger.info(f"\n{'='*50}")
-    logger.info(f"Начинаю новую публикацию - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    logger.info(f"Начинаю новую публикацию - {datetime.now(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S')} МСК")
     logger.info(f"{'='*50}\n")
     
     img_url, caption = get_random_pixiv_art(config['pixiv_refresh_token'])
@@ -254,11 +255,11 @@ async def countdown_timer(total_seconds):
     logger.info(f"ТАЙМЕР: Следующая публикация через {format_time(total_seconds)}")
     logger.info(f"{'='*50}")
     
-    start_time = datetime.now()
+    start_time = datetime.now(MOSCOW_TZ)
     target_time = start_time + timedelta(seconds=total_seconds)
     
-    logger.info(f"Текущее время: {start_time.strftime('%H:%M:%S')}")
-    logger.info(f"Публикация в: {target_time.strftime('%H:%M:%S')}")
+    logger.info(f"Текущее время: {start_time.strftime('%H:%M:%S')} МСК")
+    logger.info(f"Публикация в: {target_time.strftime('%H:%M:%S')} МСК")
     
     # Показываем обновления таймера
     last_log = datetime.now()
@@ -267,7 +268,7 @@ async def countdown_timer(total_seconds):
     while total_seconds > 0:
         await asyncio.sleep(1)
         total_seconds -= 1
-        now = datetime.now()
+        now = datetime.now(MOSCOW_TZ)  # МСК время для логов
         
         # Обновляем каждую минуту
         if (now - last_log).total_seconds() >= update_interval:
