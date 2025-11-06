@@ -21,6 +21,9 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Определяем московский часовой пояс
+MOSCOW_TZ = ZoneInfo("Europe/Moscow")
+
 # Файл конфигурации
 CONFIG_FILE = 'config.json'
 
