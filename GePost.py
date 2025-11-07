@@ -27,6 +27,11 @@ MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 # Файл конфигурации
 CONFIG_FILE = 'config.json'
 
+# ВАЖНО: Настройки для безопасной работы с Pixiv API
+PIXIV_REQUEST_DELAY = 1.0  # Задержка между запросами к Pixiv (секунды)
+MAX_PAGES_TO_FETCH = 40    # Максимум страниц для сбора (вместо 100)
+ILLUSTS_PER_PAGE = 30      # Иллюстраций на странице
+
 def load_config():
     """Загружает конфигурацию из файла или переменных окружения"""
     # Пробуем загрузить из файла (для локальной разработки)
@@ -143,84 +148,102 @@ async def send_to_telegram(image_url, caption, bot_token, channel_id, thread_id=
             logger.info(f"Отправка в топик: {thread_id}")
         
         message = await bot.send_photo(**send_params)
-        logger.info(f"Отправлено в Telegram канал: {channel_id}")
+        logger.info(f"✅ Отправлено в Telegram канал: {channel_id}")
         return message.date
     except Exception as e:
-        logger.error(f"Ошибка отправки в Telegram: {e}")
+        logger.error(f"❌ Ошибка отправки в Telegram: {e}")
         return None
 
-def get_random_pixiv_art(refresh_token):
-    """Получает случайную иллюстрацию из закладок Pixiv"""
+async def get_random_pixiv_art_safe(refresh_token):
+    """
+    БЕЗОПАСНАЯ версия получения случайной иллюстрации из закладок Pixiv
+    с защитой от rate limiting
+    """
     try:
         api = AppPixivAPI()
         api.auth(refresh_token=refresh_token)
         
-        logger.info(f"Авторизован как: {api.user_id}")
-        logger.info("Собираю информацию о страницах...")
+        logger.info(f"✓ Авторизован как: {api.user_id}")
         
-        # Собираем все страницы
-        pages_data = []
+        # ШАГ 1: Получаем только первую страницу для подсчёта
+        logger.info("📊 Получаю информацию о закладках...")
         json_result = api.user_bookmarks_illust(api.user_id, restrict="public")
         
-        while json_result:
-            illusts = json_result.get('illusts', [])
-            if illusts:
-                pages_data.append({
-                    'illusts': illusts,
-                    'page_num': len(pages_data) + 1
-                })
-            
-            if len(pages_data) % 10 == 0:
-                logger.info(f"   Собрано {len(pages_data)} страниц...")
-            
-            next_url = json_result.get('next_url')
-            if not next_url:
-                break
+        if not json_result or not json_result.get('illusts'):
+            logger.error("❌ Не удалось получить закладки")
+            return None, None
+        
+        first_page_illusts = json_result.get('illusts', [])
+        total_illusts_estimate = len(first_page_illusts) * MAX_PAGES_TO_FETCH
+        
+        logger.info(f"📚 Будет проверено ~{total_illusts_estimate} закладок (максимум {MAX_PAGES_TO_FETCH} страниц)")
+        
+        # ШАГ 2: Собираем несколько страниц С ЗАДЕРЖКАМИ
+        all_illusts = []
+        all_illusts.extend(first_page_illusts)
+        
+        pages_collected = 1
+        next_url = json_result.get('next_url')
+        
+        while next_url and pages_collected < MAX_PAGES_TO_FETCH:
+            # КРИТИЧНО: Задержка между запросами!
+            logger.info(f"⏳ Пауза {PIXIV_REQUEST_DELAY}с перед следующим запросом...")
+            await asyncio.sleep(PIXIV_REQUEST_DELAY)
             
             next_qs = api.parse_qs(next_url)
             json_result = api.user_bookmarks_illust(**next_qs)
             
-            if len(pages_data) >= 100:
-                logger.info("   Достигнут лимит в 100 страниц")
+            if not json_result:
                 break
+                
+            illusts = json_result.get('illusts', [])
+            if not illusts:
+                break
+            
+            all_illusts.extend(illusts)
+            pages_collected += 1
+            
+            logger.info(f"   ✓ Страница {pages_collected}/{MAX_PAGES_TO_FETCH} загружена ({len(illusts)} арт.)")
+            
+            next_url = json_result.get('next_url')
         
-        logger.info(f"Всего собрано: {len(pages_data)} страниц ({len(pages_data) * 30} закладок)")
+        logger.info(f"✅ Всего собрано: {len(all_illusts)} иллюстраций")
         
-        if not pages_data:
-            logger.error("Не удалось получить закладки")
+        if not all_illusts:
+            logger.error("❌ Не удалось получить иллюстрации")
             return None, None
         
-        # Выбираем случайную иллюстрацию
-        random_page_data = random.choice(pages_data)
-        random_illust = random.choice(random_page_data['illusts'])
+        # ШАГ 3: Выбираем случайную иллюстрацию
+        random_illust = random.choice(all_illusts)
         
-        logger.info(f"Выбрана страница: {random_page_data['page_num']}")
-        logger.info(f"Случайная иллюстрация:")
-        logger.info(f"   Название: {random_illust['title']}")
-        logger.info(f"   Автор: {random_illust['user']['name']}")
-        logger.info(f"   ID: {random_illust['id']}")
-        logger.info(f"   Лайков: {random_illust['total_bookmarks']}")
-        logger.info(f"   Просмотров: {random_illust['total_view']}")
+        logger.info(f"🎨 Выбрана случайная иллюстрация:")
+        logger.info(f"   📝 Название: {random_illust['title']}")
+        logger.info(f"   👤 Автор: {random_illust['user']['name']}")
+        logger.info(f"   🆔 ID: {random_illust['id']}")
+        logger.info(f"   ❤️  Лайков: {random_illust['total_bookmarks']}")
+        logger.info(f"   👁️  Просмотров: {random_illust['total_view']}")
         
         # Получаем URL изображения
         import re
         medium_url = random_illust['image_urls']['medium']
         img_url = re.sub(r'/c/\d+x\d+_\d+/', '/', medium_url)
         
-        logger.info(f"URL изображения: {img_url}")
+        logger.info(f"🔗 URL изображения получен")
         
         # Формируем красивое описание для Telegram
         author = random_illust['user']['name']
         title = random_illust['title']
         artwork_url = f"https://www.pixiv.net/artworks/{random_illust['id']}"
         
-        # Создаем caption с гиперссылкой, спрятанной в названии
+        # Создаем caption с гиперссылкой
         caption = f"<b>{author}</b> | <a href=\"{artwork_url}\">{title}</a>"
         
         return img_url, caption
         
     except Exception as e:
-        logger.error(f"Ошибка при получении арта из Pixiv: {e}")
+        logger.error(f"❌ Ошибка при получении арта из Pixiv: {e}")
+        import traceback
+        logger.error(traceback.format_exc())
         return None, None
 
 def is_quiet_hours(config):
@@ -245,10 +268,10 @@ def is_quiet_hours(config):
 async def post_random_art(config):
     """Публикует случайную картинку"""
     logger.info(f"\n{'='*50}")
-    logger.info(f"Начинаю новую публикацию - {datetime.now(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S')} МСК")
+    logger.info(f"🚀 Начинаю новую публикацию - {datetime.now(MOSCOW_TZ).strftime('%Y-%m-%d %H:%M:%S')} МСК")
     logger.info(f"{'='*50}\n")
     
-    img_url, caption = get_random_pixiv_art(config['pixiv_refresh_token'])
+    img_url, caption = await get_random_pixiv_art_safe(config['pixiv_refresh_token'])
     
     if img_url:
         # Получаем thread_id из конфига, если он есть
@@ -262,10 +285,10 @@ async def post_random_art(config):
             thread_id
         )
         if post_time:
-            logger.info("Публикация завершена успешно")
+            logger.info("✅ Публикация завершена успешно")
             return post_time
     else:
-        logger.error("Не удалось получить изображение")
+        logger.error("❌ Не удалось получить изображение")
     
     return None
 
@@ -288,14 +311,14 @@ def format_time(seconds):
 async def countdown_timer(total_seconds):
     """Показывает обратный отсчет до следующей публикации"""
     logger.info(f"\n{'='*50}")
-    logger.info(f"ТАЙМЕР: Следующая публикация через {format_time(total_seconds)}")
+    logger.info(f"⏰ ТАЙМЕР: Следующая публикация через {format_time(total_seconds)}")
     logger.info(f"{'='*50}")
     
     start_time = datetime.now(MOSCOW_TZ)
     target_time = start_time + timedelta(seconds=total_seconds)
     
-    logger.info(f"Текущее время: {start_time.strftime('%H:%M:%S')} МСК")
-    logger.info(f"Публикация в: {target_time.strftime('%H:%M:%S')} МСК")
+    logger.info(f"🕐 Текущее время: {start_time.strftime('%H:%M:%S')} МСК")
+    logger.info(f"🎯 Публикация в: {target_time.strftime('%H:%M:%S')} МСК")
     
     # Показываем обновления таймера
     last_log = datetime.now(MOSCOW_TZ)
@@ -308,40 +331,41 @@ async def countdown_timer(total_seconds):
         
         # Обновляем каждую минуту
         if (now - last_log).total_seconds() >= update_interval:
-            logger.info(f"[ТАЙМЕР] Осталось: {format_time(total_seconds)}")
+            logger.info(f"⏰ [ТАЙМЕР] Осталось: {format_time(total_seconds)}")
             last_log = now
         
         # В последнюю минуту - каждые 10 секунд
         if 10 < total_seconds <= 60 and total_seconds % 10 == 0:
-            logger.info(f"[ТАЙМЕР] Осталось: {format_time(total_seconds)}")
+            logger.info(f"⏰ [ТАЙМЕР] Осталось: {format_time(total_seconds)}")
         
         # В последние 10 секунд - каждую секунду
         if total_seconds <= 10:
-            logger.info(f"[ТАЙМЕР] {total_seconds} секунд...")
+            logger.info(f"⏰ [ТАЙМЕР] {total_seconds} секунд...")
     
-    logger.info(f"[ТАЙМЕР] Время вышло! Начинаю публикацию...\n")
+    logger.info(f"⏰ [ТАЙМЕР] Время вышло! Начинаю публикацию...\n")
 
 async def run_bot():
     """Основной цикл бота"""
     config = load_config()
     
     logger.info("=" * 50)
-    logger.info("БОТ ЗАПУЩЕН!")
-    logger.info(f"Интервал публикаций: {config['interval_hours']}ч {config['interval_minutes']}м")
+    logger.info("🤖 БОТ ЗАПУЩЕН!")
+    logger.info(f"⏱️  Интервал публикаций: {config['interval_hours']}ч {config['interval_minutes']}м")
     
     deviation = config.get('interval_deviation_minutes', 0)
     if deviation > 0:
-        logger.info(f"Отклонение интервала: ±{deviation} минут")
+        logger.info(f"📊 Отклонение интервала: ±{deviation} минут")
     else:
-        logger.info(f"Отклонение: выключено (точный интервал)")
+        logger.info(f"📊 Отклонение: выключено (точный интервал)")
     
-    logger.info(f"Канал: {config['telegram_channel_id']}")
-    logger.info(f"Пост при запуске: {'ВКЛ' if config['post_immediately_on_start'] else 'ВЫКЛ'}")
+    logger.info(f"📢 Канал: {config['telegram_channel_id']}")
+    logger.info(f"🚀 Пост при запуске: {'ВКЛ' if config['post_immediately_on_start'] else 'ВЫКЛ'}")
     
     quiet = config.get('quiet_hours', {})
     if quiet.get('enabled'):
-        logger.info(f"Тихие часы: {quiet['start_hour']}:00 - {quiet['end_hour']}:00")
+        logger.info(f"🌙 Тихие часы: {quiet['start_hour']}:00 - {quiet['end_hour']}:00")
     
+    logger.info(f"⚙️  Pixiv: максимум {MAX_PAGES_TO_FETCH} страниц, задержка {PIXIV_REQUEST_DELAY}с")
     logger.info("=" * 50 + "\n")
     
     base_interval_seconds = config['interval_hours'] * 3600 + config['interval_minutes'] * 60
@@ -370,9 +394,9 @@ async def main():
     try:
         await run_bot()
     except KeyboardInterrupt:
-        logger.info("\nБот остановлен пользователем")
+        logger.info("\n👋 Бот остановлен пользователем")
     except Exception as e:
-        logger.error(f"Критическая ошибка: {e}", exc_info=True)
+        logger.error(f"❌ Критическая ошибка: {e}", exc_info=True)
         raise
 
 if __name__ == "__main__":
