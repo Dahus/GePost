@@ -49,6 +49,7 @@ def load_config():
         'telegram_thread_id': os.getenv('TELEGRAM_THREAD_ID'),
         'interval_hours': int(os.getenv('INTERVAL_HOURS', 3)),
         'interval_minutes': int(os.getenv('INTERVAL_MINUTES', 0)),
+        'interval_deviation_minutes': int(os.getenv('INTERVAL_DEVIATION_MINUTES', 0)),
         'post_immediately_on_start': os.getenv('POST_IMMEDIATELY_ON_START', 'false').lower() == 'true',
         'quiet_hours': {
             'enabled': os.getenv('QUIET_HOURS_ENABLED', 'false').lower() == 'true',
@@ -63,6 +64,38 @@ def load_config():
     
     logger.info("Конфигурация загружена из переменных окружения")
     return config
+
+def calculate_next_interval(base_seconds, deviation_minutes):
+    """
+    Вычисляет следующий интервал с учётом случайного отклонения
+    
+    Args:
+        base_seconds: базовый интервал в секундах
+        deviation_minutes: максимальное отклонение в минутах (от -N до +N)
+    
+    Returns:
+        int: итоговый интервал в секундах
+    """
+    if deviation_minutes == 0:
+        return base_seconds
+    
+    # Генерируем случайное отклонение от -deviation до +deviation
+    deviation_seconds = random.randint(-deviation_minutes * 60, deviation_minutes * 60)
+    
+    # Добавляем отклонение к базовому интервалу
+    result_seconds = base_seconds + deviation_seconds
+    
+    # Убеждаемся, что результат положительный (минимум 1 минута)
+    result_seconds = max(60, result_seconds)
+    
+    if deviation_seconds > 0:
+        logger.info(f"📊 Отклонение: +{format_time(abs(deviation_seconds))}")
+    elif deviation_seconds < 0:
+        logger.info(f"📊 Отклонение: -{format_time(abs(deviation_seconds))}")
+    else:
+        logger.info(f"📊 Отклонение: точно по интервалу")
+    
+    return result_seconds
 
 async def get_last_post_time(bot_token, channel_id):
     """Получает время последнего поста в канале"""
@@ -295,6 +328,13 @@ async def run_bot():
     logger.info("=" * 50)
     logger.info("БОТ ЗАПУЩЕН!")
     logger.info(f"Интервал публикаций: {config['interval_hours']}ч {config['interval_minutes']}м")
+    
+    deviation = config.get('interval_deviation_minutes', 0)
+    if deviation > 0:
+        logger.info(f"Отклонение интервала: ±{deviation} минут")
+    else:
+        logger.info(f"Отклонение: выключено (точный интервал)")
+    
     logger.info(f"Канал: {config['telegram_channel_id']}")
     logger.info(f"Пост при запуске: {'ВКЛ' if config['post_immediately_on_start'] else 'ВЫКЛ'}")
     
@@ -304,7 +344,8 @@ async def run_bot():
     
     logger.info("=" * 50 + "\n")
     
-    interval_seconds = config['interval_hours'] * 3600 + config['interval_minutes'] * 60
+    base_interval_seconds = config['interval_hours'] * 3600 + config['interval_minutes'] * 60
+    deviation_minutes = config.get('interval_deviation_minutes', 0)
     
     # Постим сразу при запуске, если включен флаг и не тихие часы
     if config['post_immediately_on_start'] and not is_quiet_hours(config):
@@ -312,12 +353,15 @@ async def run_bot():
     
     # Бесконечный цикл с интервалом
     while True:
-        await countdown_timer(interval_seconds)
+        # Вычисляем следующий интервал с учётом отклонения
+        next_interval = calculate_next_interval(base_interval_seconds, deviation_minutes)
+        
+        await countdown_timer(next_interval)
         
         # Проверяем тихие часы перед постом
         if is_quiet_hours(config):
             logger.info("⏸️  ТИХИЕ ЧАСЫ - публикация пропущена")
-            logger.info(f"   Следующая попытка через {format_time(interval_seconds)}\n")
+            logger.info(f"   Следующая попытка через {format_time(next_interval)}\n")
         else:
             await post_random_art(config)
 
