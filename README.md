@@ -22,6 +22,7 @@ Set environment variables or create `config.json`:
   "telegram_thread_id": 1,
   "interval_hours": 1,
   "interval_minutes": 0,
+  "interval_deviation_minutes": 10,
   "post_immediately_on_start": true,
   
   "quiet_hours": {
