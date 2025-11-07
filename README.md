@@ -16,7 +16,7 @@ pip install -r requirements.txt
 Set environment variables or create `config.json`:
 ```json
 {
-  "pixiv_refresh_token": "Sj3yJ-your_token",
+  "pixiv_refresh_token": "your_token",
   "telegram_bot_token": "your_token",
   "telegram_channel_id": "@your_channel",
   "telegram_thread_id": 1,
